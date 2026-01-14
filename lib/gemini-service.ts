@@ -95,32 +95,89 @@ export const generateDynamicInsights = async (data: AssessmentData): Promise<AiI
 };
 
 /**
+ * Calculate dynamic health score based on multiple property factors
+ * Accounts for: condition, maintenance history, property size, and stories
+ */
+function calculateHealthScore(data: AssessmentData): number {
+  // Track condition scoring (primary factor: current state)
+  const conditionScores: Record<string, number> = {
+    clean: 90,      // Excellent starting point
+    dusty: 70,      // Acceptable but needs attention
+    dirty: 45,      // Below maintenance standard
+    neglected: 20,  // Critical condition
+  };
+
+  // Last cleaned scoring (maintenance history)
+  const maintenanceScores: Record<string, number> = {
+    recent: 0,      // No penalty - recently cleaned
+    '1-2yr': -15,   // Minor concern
+    'over2yr': -30, // Significant concern
+    never: -45,     // Critical concern
+  };
+
+  // Property size complexity factor (larger = more surface area = harder to maintain)
+  const sizeComplexity: Record<string, number> = {
+    small: 0,       // Baseline
+    medium: -5,     // Slightly more complex
+    large: -10,     // More complex
+    xl: -15,        // Most complex
+  };
+
+  // Stories complexity factor (height = difficulty + exposure)
+  const storiesComplexity: Record<string, number> = {
+    '1': 0,         // Baseline (easier to access)
+    '2': -8,        // More height
+    '3+': -15,      // Most height exposure
+  };
+
+  // Calculate base score from condition
+  const conditionScore = conditionScores[data.trackCondition] || 60;
+
+  // Apply maintenance history adjustment
+  const maintenanceAdjustment = maintenanceScores[data.lastCleaned] || -20;
+
+  // Apply property complexity factors
+  const sizeAdjustment = sizeComplexity[data.homeSize] || -5;
+  const storiesAdjustment = storiesComplexity[data.stories] || -8;
+
+  // Calculate raw health score
+  let rawScore = conditionScore + maintenanceAdjustment + sizeAdjustment + storiesAdjustment;
+
+  // Apply resilience boost (properties that maintain get slight boost)
+  if (data.lastCleaned === 'recent') {
+    rawScore += 5; // Recent maintenance = better care
+  }
+
+  // Clamp score to 0-100 range
+  const healthScore = Math.max(0, Math.min(100, Math.round(rawScore)));
+
+  return healthScore;
+}
+
+/**
  * Fallback insights when Gemini API is not available or fails
  */
 function getFallbackInsights(data: AssessmentData): AiInsight {
-  const conditionScores: Record<string, number> = {
-    clean: 85,
-    dusty: 70,
-    dirty: 50,
-    neglected: 30,
+  // Calculate dynamic health score
+  const healthScore = calculateHealthScore(data);
+
+  // Generate insights based on health score
+  const getHealthStatus = (score: number): string => {
+    if (score > 85) return "excellent";
+    if (score > 70) return "good";
+    if (score > 50) return "maintenance required";
+    return "urgent attention needed";
   };
 
-  const lastCleanedScores: Record<string, number> = {
-    recent: 10,
-    '1-2yr': 20,
-    'over2yr': 30,
-    never: 40,
-  };
-
-  const baseScore = conditionScores[data.trackCondition] || 60;
-  const ageAdjustment = lastCleanedScores[data.lastCleaned] || 20;
-  const healthScore = Math.max(0, Math.min(100, baseScore - ageAdjustment + 40));
+  const status = getHealthStatus(healthScore);
+  const locationContext = data.zipCode ? `in ${data.zipCode}` : 'in Northeast PA';
+  const lastCleanedContext = data.lastCleaned === 'never' ? 'never been professionally cleaned' : `last cleaned ${data.lastCleaned}`;
 
   return {
-    observation: `Based on what you told me—${data.homeSize} home in ${data.zipCode} with ${data.trackCondition} tracks and last cleaned ${data.lastCleaned}—I'm expecting to find significant buildup in the channels and possible seal degradation starting.`,
-    riskFactor: `Homes that wait in this condition typically see seal damage within 12-18 months, which usually costs $200-300 per window to repair.`,
-    financialImpact: `In my experience, waiting another season typically leads to $500-1000+ in preventable repairs from seal and frame damage.`,
-    proTip: `Properties like yours in Northeast PA should ideally get cleaned 2-3 times per year to prevent seal cracking and frame rot from hard water residue and winter salt. This keeps maintenance costs down long-term.`,
-    healthScore: Math.round(healthScore),
+    observation: `Based on what you told me—${data.homeSize} home ${locationContext} with ${data.trackCondition} tracks that have ${lastCleanedContext}—I'm expecting to find buildup in the channels and potential mineral deposits typical for NEPA properties.`,
+    riskFactor: `Properties in ${status} condition typically see accelerated seal degradation from hard water mineral buildup and winter salt residue. Waiting usually costs more in repairs than proactive maintenance.`,
+    financialImpact: `In my experience with homes like yours, regular cleaning prevents $200-500+ in annual preventable damage from seal failure and frame deterioration. Waiting often doubles that cost.`,
+    proTip: `Northeast PA's mineral-heavy water and winter road salt make ${data.homeSize} properties like yours ideal candidates for 2-3 cleanings per year. This timing prevents the hard water etching you see on older, neglected windows throughout the region.`,
+    healthScore,
   };
 }
